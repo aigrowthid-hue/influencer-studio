@@ -164,24 +164,32 @@ export class FalImageProvider implements IImageProvider {
     };
   }
 
-  // GPT Image 1 Edit — strong text fidelity, slower & pricier.
+  // GPT Image 1 Edit — strongest text/label fidelity, slower & pricier.
+  // If OPENAI_API_KEY is set we use the BYOK endpoint (charged to OpenAI account).
+  // Otherwise we use the Fal-hosted endpoint (charged to Fal credits, higher price).
   private async runSceneGptImage(
     input: ImageGenerationInput,
     refs: string[],
     count: number
   ): Promise<ImageGenerationResult> {
-    const endpoint = 'fal-ai/gpt-image-1/edit-image/byok';
+    const openaiKey = process.env.OPENAI_API_KEY?.trim();
+    const useByok = !!openaiKey;
+    const endpoint = useByok
+      ? 'fal-ai/gpt-image-1/edit-image/byok'
+      : 'fal-ai/gpt-image-1/edit-image';
     const image_size = this.mapGptImageSize(input.aspectRatio);
 
     const tasks = Array.from({ length: count }, (_, i) => {
       const variation = `${i}_${Math.floor(Math.random() * 99999)}`;
-      return this.callFal(endpoint, {
+      const payload: Record<string, any> = {
         prompt: `${input.prompt}\n\n[variation:${variation}]`,
         image_urls: refs,
         image_size,
         num_images: 1,
         quality: 'high'
-      });
+      };
+      if (useByok && openaiKey) payload.openai_api_key = openaiKey;
+      return this.callFal(endpoint, payload);
     });
 
     const urls = await this.collectUrls(tasks, 'GPT Image scene generation failed');
@@ -189,7 +197,7 @@ export class FalImageProvider implements IImageProvider {
       success: true,
       outputUrls: urls,
       provider: 'Fal.ai',
-      model: 'gpt-image-1-edit'
+      model: useByok ? 'gpt-image-1-edit-byok' : 'gpt-image-1-edit'
     };
   }
 
