@@ -1,5 +1,23 @@
 import { IImageProvider, ImageGenerationInput, ImageGenerationResult } from './image-provider';
 
+type SceneModel = 'nano-banana' | 'ideogram-character' | 'gpt-image';
+
+const FAL_RUN_URL = 'https://fal.run';
+
+function resolveSceneModel(): SceneModel {
+  const m = (process.env.FAL_SCENE_MODEL || '').toLowerCase().trim();
+  if (m === 'ideogram-character' || m === 'ideogram') return 'ideogram-character';
+  if (m === 'gpt-image' || m === 'gpt-image-1' || m === 'gpt-image-2') return 'gpt-image';
+  return 'nano-banana';
+}
+
+interface FalImageResponse {
+  images?: Array<{ url?: string }>;
+  detail?: unknown;
+  message?: string;
+  error?: unknown;
+}
+
 export class FalImageProvider implements IImageProvider {
   private apiKey: string;
 
@@ -9,123 +27,254 @@ export class FalImageProvider implements IImageProvider {
 
   async generateImage(input: ImageGenerationInput): Promise<ImageGenerationResult> {
     try {
-      // Map ratios to Fal.ai image sizes
-      let image_size = 'square_hd';
-      if (input.aspectRatio === '16:9') {
-        image_size = 'landscape_16_9';
-      } else if (input.aspectRatio === '4:5' || input.aspectRatio === '9:16') {
-        image_size = 'portrait_4_5';
+      const count = Math.max(1, input.outputCount || 1);
+
+      if (input.workflow === 'character_sheet') {
+        return await this.runCharacterSheet(input, count);
       }
-
-      // We use the specialized fal-ai/ideogram/character models for scene generation 
-      // when a character sheet reference is available, to ensure 100% face and identity consistency.
-      const useIdeogramCharacter = input.workflow === 'scene' && !!input.characterSheetUrl;
-
-      // For base image canvas in Remix/Edit, we prioritize Pose, Outfit, and Location references 
-      // which contain human shapes or scene structures. Product references should only be generated 
-      // via text prompts to prevent the product bottle from warping into a human canvas.
-      const editRefUrl = input.poseRefUrl || input.outfitRefUrl || input.locationRefUrl || (useIdeogramCharacter ? '' : input.propRefUrl);
-      
-      // Determine if we should trigger image-to-image remix mode (requires a guide image)
-      // or standard text-to-image character mode (when no guide images are present).
-      const hasGuideImage = editRefUrl && editRefUrl.trim() !== '';
-      const useRemixMode = useIdeogramCharacter && hasGuideImage;
-      const useEditEndpoint = !useIdeogramCharacter && !!editRefUrl && input.workflow !== 'character_sheet';
-
-      let modelEndpoint = 'openai/gpt-image-2';
-      if (useIdeogramCharacter) {
-        modelEndpoint = useRemixMode 
-          ? 'fal-ai/ideogram/character/remix' 
-          : 'fal-ai/ideogram/character';
-      } else if (useEditEndpoint) {
-        modelEndpoint = 'openai/gpt-image-2/edit';
-      }
-
-      // Build body parameters
-      const payload: Record<string, any> = {};
-
-      if (useIdeogramCharacter) {
-        payload.prompt = input.prompt;
-        payload.reference_image_urls = [input.characterSheetUrl];
-        if (useRemixMode) {
-          payload.image_url = editRefUrl;
-        }
-        if (input.aspectRatio) {
-          payload.aspect_ratio = input.aspectRatio;
-        }
-      } else {
-        payload.prompt = input.prompt;
-        payload.image_size = image_size;
-        if (useEditEndpoint) {
-          payload.image_urls = [editRefUrl];
-        }
-      }
-
-      const count = input.outputCount || 1;
-      const promises = Array.from({ length: count }, (_, index) => {
-        // Append a unique cache buster tag to the prompt to force Fal.ai and DALL-E to generate a unique image,
-        // preventing API cache duplication for identical prompts and ensuring distinct faces/poses.
-        const uniquePrompt = `${input.prompt}\n[Seed: ${Math.floor(Math.random() * 99999999)}_${index}]`;
-        const requestPayload = {
-          ...payload,
-          prompt: uniquePrompt
-        };
-
-        return fetch(`https://fal.run/${modelEndpoint}`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': `Key ${this.apiKey}`
-          },
-          body: JSON.stringify(requestPayload)
-        }).then(async (res) => {
-          const resData = await res.json();
-          if (!res.ok) {
-            const errorMsg = typeof resData.detail === 'object'
-              ? JSON.stringify(resData.detail)
-              : (resData.detail || resData.message || `Fal.ai image API (${modelEndpoint}) error`);
-            throw new Error(errorMsg);
-          }
-          const url = resData.images?.[0]?.url;
-          if (!url) {
-            throw new Error('No image URL returned by Fal.ai');
-          }
-          return url;
-        });
-      });
-
-      const results = await Promise.allSettled(promises);
-      const outputUrls: string[] = [];
-      let lastError: any = null;
-
-      results.forEach((result) => {
-        if (result.status === 'fulfilled') {
-          outputUrls.push(result.value);
-        } else {
-          lastError = result.reason;
-        }
-      });
-
-      if (outputUrls.length === 0) {
-        throw lastError || new Error('No images could be generated');
-      }
-
-      return {
-        success: true,
-        outputUrls,
-        provider: 'Fal.ai',
-        model: useIdeogramCharacter ? (useRemixMode ? 'ideogram-character-remix' : 'ideogram-character') : (useEditEndpoint ? 'gpt-image-2-edit' : 'gpt-image-2')
-      };
-
+      return await this.runScene(input, count);
     } catch (error: any) {
       console.error('Fal.ai image generation error:', error);
       return {
         success: false,
         outputUrls: [],
-        errorMessage: error.message || 'Unknown Fal.ai image generation error',
+        errorMessage: error?.message || 'Unknown Fal.ai error',
         provider: 'Fal.ai',
-        model: 'gpt-image-2'
+        model: 'unknown'
       };
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // CHARACTER SHEET — text-to-image grid. Ideogram v3 handles layout best.
+  // ---------------------------------------------------------------------------
+  private async runCharacterSheet(input: ImageGenerationInput, count: number): Promise<ImageGenerationResult> {
+    const endpoint = 'fal-ai/ideogram/v3';
+    const aspectRatio = input.aspectRatio || '16:9';
+
+    const tasks = Array.from({ length: count }, () => {
+      const seed = Math.floor(Math.random() * 99999999);
+      const payload: Record<string, any> = {
+        prompt: `${input.prompt}\n[seed:${seed}]`,
+        aspect_ratio: aspectRatio,
+        rendering_speed: 'BALANCED',
+        style: 'REALISTIC'
+      };
+      if (input.negativePrompt) payload.negative_prompt = input.negativePrompt;
+      return this.callFal(endpoint, payload);
+    });
+
+    const urls = await this.collectUrls(tasks, 'Character sheet generation failed');
+    return {
+      success: true,
+      outputUrls: urls,
+      provider: 'Fal.ai',
+      model: 'ideogram-v3'
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // SCENE — compose multiple references. Model selection via FAL_SCENE_MODEL.
+  // Order of references (must match scene-builder positions):
+  //   1. characterSheet  2. outfit  3. pose  4. location  5. product
+  // ---------------------------------------------------------------------------
+  private async runScene(input: ImageGenerationInput, count: number): Promise<ImageGenerationResult> {
+    const refs: string[] = [
+      input.characterSheetUrl,
+      input.outfitRefUrl,
+      input.poseRefUrl,
+      input.locationRefUrl,
+      input.propRefUrl
+    ].filter((u): u is string => !!u && u.trim().length > 0);
+
+    if (refs.length === 0) {
+      return this.runSceneTextOnly(input, count);
+    }
+
+    const model = resolveSceneModel();
+    if (model === 'ideogram-character') return this.runSceneIdeogram(input, refs, count);
+    if (model === 'gpt-image') return this.runSceneGptImage(input, refs, count);
+    return this.runSceneNanoBanana(input, refs, count);
+  }
+
+  // Nano Banana (Gemini 2.5 Flash Image Edit) — multi-image composition.
+  private async runSceneNanoBanana(
+    input: ImageGenerationInput,
+    refs: string[],
+    count: number
+  ): Promise<ImageGenerationResult> {
+    const endpoint = 'fal-ai/nano-banana/edit';
+
+    const tasks = Array.from({ length: count }, (_, i) => {
+      const variation = `${i}_${Math.floor(Math.random() * 99999)}`;
+      return this.callFal(endpoint, {
+        prompt: `${input.prompt}\n\n[variation:${variation}]`,
+        image_urls: refs,
+        num_images: 1,
+        output_format: 'jpeg'
+      });
+    });
+
+    const urls = await this.collectUrls(tasks, 'Nano Banana scene generation failed');
+    return {
+      success: true,
+      outputUrls: urls,
+      provider: 'Fal.ai',
+      model: 'nano-banana-edit'
+    };
+  }
+
+  // Ideogram Character — strongest face lock, weaker multi-reference composition.
+  // Character sheet → reference_image_urls. First non-character guide → remix image.
+  private async runSceneIdeogram(
+    input: ImageGenerationInput,
+    _refs: string[],
+    count: number
+  ): Promise<ImageGenerationResult> {
+    const characterRef = input.characterSheetUrl;
+    if (!characterRef) return this.runSceneNanoBanana(input, _refs, count);
+
+    const remixGuide =
+      input.poseRefUrl ||
+      input.outfitRefUrl ||
+      input.locationRefUrl ||
+      input.propRefUrl;
+    const useRemix = !!remixGuide && remixGuide !== characterRef;
+    const endpoint = useRemix ? 'fal-ai/ideogram/character/remix' : 'fal-ai/ideogram/character';
+    const aspectRatio = input.aspectRatio || '1:1';
+
+    const tasks = Array.from({ length: count }, () => {
+      const seed = Math.floor(Math.random() * 99999999);
+      const payload: Record<string, any> = {
+        prompt: `${input.prompt}\n[seed:${seed}]`,
+        reference_image_urls: [characterRef],
+        aspect_ratio: aspectRatio,
+        rendering_speed: 'BALANCED'
+      };
+      if (useRemix && remixGuide) payload.image_url = remixGuide;
+      return this.callFal(endpoint, payload);
+    });
+
+    const urls = await this.collectUrls(tasks, 'Ideogram Character scene generation failed');
+    return {
+      success: true,
+      outputUrls: urls,
+      provider: 'Fal.ai',
+      model: useRemix ? 'ideogram-character-remix' : 'ideogram-character'
+    };
+  }
+
+  // GPT Image 1 Edit — strong text fidelity, slower & pricier.
+  private async runSceneGptImage(
+    input: ImageGenerationInput,
+    refs: string[],
+    count: number
+  ): Promise<ImageGenerationResult> {
+    const endpoint = 'fal-ai/gpt-image-1/edit-image/byok';
+    const image_size = this.mapGptImageSize(input.aspectRatio);
+
+    const tasks = Array.from({ length: count }, (_, i) => {
+      const variation = `${i}_${Math.floor(Math.random() * 99999)}`;
+      return this.callFal(endpoint, {
+        prompt: `${input.prompt}\n\n[variation:${variation}]`,
+        image_urls: refs,
+        image_size,
+        num_images: 1,
+        quality: 'high'
+      });
+    });
+
+    const urls = await this.collectUrls(tasks, 'GPT Image scene generation failed');
+    return {
+      success: true,
+      outputUrls: urls,
+      provider: 'Fal.ai',
+      model: 'gpt-image-1-edit'
+    };
+  }
+
+  // No reference at all — fall back to text-to-image.
+  private async runSceneTextOnly(input: ImageGenerationInput, count: number): Promise<ImageGenerationResult> {
+    const endpoint = 'fal-ai/ideogram/v3';
+    const aspectRatio = input.aspectRatio || '1:1';
+
+    const tasks = Array.from({ length: count }, () => {
+      const seed = Math.floor(Math.random() * 99999999);
+      const payload: Record<string, any> = {
+        prompt: `${input.prompt}\n[seed:${seed}]`,
+        aspect_ratio: aspectRatio,
+        rendering_speed: 'BALANCED',
+        style: 'REALISTIC'
+      };
+      if (input.negativePrompt) payload.negative_prompt = input.negativePrompt;
+      return this.callFal(endpoint, payload);
+    });
+
+    const urls = await this.collectUrls(tasks, 'Text-to-image scene generation failed');
+    return {
+      success: true,
+      outputUrls: urls,
+      provider: 'Fal.ai',
+      model: 'ideogram-v3'
+    };
+  }
+
+  // ---------------------------------------------------------------------------
+  // helpers
+  // ---------------------------------------------------------------------------
+  private async callFal(endpoint: string, payload: Record<string, any>): Promise<string> {
+    const res = await fetch(`${FAL_RUN_URL}/${endpoint}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Key ${this.apiKey}`
+      },
+      body: JSON.stringify(payload)
+    });
+
+    const data: FalImageResponse = await res.json().catch(() => ({} as FalImageResponse));
+    if (!res.ok) {
+      const detail = data.detail;
+      const detailMsg = typeof detail === 'object' && detail !== null
+        ? JSON.stringify(detail)
+        : (typeof detail === 'string' ? detail : '');
+      const errorMsg = detailMsg || data.message || (typeof data.error === 'string' ? data.error : '') || `Fal.ai ${endpoint} returned ${res.status}`;
+      throw new Error(errorMsg);
+    }
+
+    const url = data.images?.[0]?.url;
+    if (!url) throw new Error(`Fal.ai ${endpoint} response missing image URL`);
+    return url;
+  }
+
+  private async collectUrls(tasks: Promise<string>[], fallbackError: string): Promise<string[]> {
+    const settled = await Promise.allSettled(tasks);
+    const urls: string[] = [];
+    let lastError: unknown = null;
+    for (const r of settled) {
+      if (r.status === 'fulfilled') urls.push(r.value);
+      else lastError = r.reason;
+    }
+    if (urls.length === 0) {
+      const msg = lastError instanceof Error ? lastError.message : String(lastError || fallbackError);
+      throw new Error(msg);
+    }
+    return urls;
+  }
+
+  private mapGptImageSize(aspectRatio?: string): string {
+    switch (aspectRatio) {
+      case '16:9':
+      case '4:3':
+      case '3:2':
+        return '1536x1024';
+      case '9:16':
+      case '4:5':
+      case '2:3':
+        return '1024x1536';
+      case '1:1':
+      default:
+        return '1024x1024';
     }
   }
 }

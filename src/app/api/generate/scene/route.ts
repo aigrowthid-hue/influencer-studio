@@ -20,7 +20,12 @@ export async function POST(req: NextRequest) {
       userSceneDescription,
       aspectRatio = '1:1',
       outputCount = 1,
-      // Reference upload URLs (optional)
+
+      // Identity
+      identityLock,
+      characterSheetReferenceImage,
+
+      // Reference uploads (base64 data URLs are accepted by Fal endpoints)
       locationRefUrl,
       backgroundReferenceImage,
       outfitRefUrl,
@@ -29,36 +34,14 @@ export async function POST(req: NextRequest) {
       poseReferenceImage,
       propRefUrl,
       productReferenceImage,
-      
-      // Override prompts
-      finalComposedPrompt,
-      negativePrompt: negativePromptOverride,
-
-      // Control toggles
-      location,
-      timeOfDay,
-      weather,
-      cameraAngle,
-      shotType,
-      lensStyle,
-      lighting,
-      pose,
-      expression,
-      action,
-      outfitInstruction,
-      props,
-      productPlacement,
-      realismLevel,
-      contentType,
-      useAdvanced
     } = body;
 
     const finalCharacterId = selectedInfluencerId || characterId;
-    const finalSceneDescription = userSceneDescription || sceneDescription;
-    const finalLocationRefUrl = backgroundReferenceImage || locationRefUrl;
-    const finalOutfitRefUrl = outfitReferenceImage || outfitRefUrl;
-    const finalPoseRefUrl = poseReferenceImage || poseRefUrl;
-    const finalPropRefUrl = productReferenceImage || propRefUrl;
+    const finalSceneDescription = (userSceneDescription || sceneDescription || '').trim();
+    const finalLocationRefUrl = backgroundReferenceImage || locationRefUrl || null;
+    const finalOutfitRefUrl = outfitReferenceImage || outfitRefUrl || null;
+    const finalPoseRefUrl = poseReferenceImage || poseRefUrl || null;
+    const finalPropRefUrl = productReferenceImage || propRefUrl || null;
 
     if (!finalCharacterId || !finalSceneDescription) {
       return NextResponse.json({ error: 'characterId and sceneDescription are required' }, { status: 400 });
@@ -69,10 +52,15 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: 'Character not found' }, { status: 404 });
     }
 
-    // Calculate credits cost
+    const characterSheetUrl = characterSheetReferenceImage || character.characterSheetUrl;
+    if (!characterSheetUrl) {
+      return NextResponse.json({
+        error: 'Character sheet not found. Please generate the character sheet first in Character Studio.'
+      }, { status: 400 });
+    }
+
     totalCost = COST_PER_SCENE_IMAGE * Math.max(1, outputCount);
 
-    // 1. Check if user has enough credits
     const hasCredits = await CreditService.hasSufficientCredits(userId, totalCost);
     if (!hasCredits) {
       return NextResponse.json({
@@ -80,45 +68,27 @@ export async function POST(req: NextRequest) {
       }, { status: 402 });
     }
 
-    // 2. Build composed prompt
-    const { finalPrompt: builtPrompt, negativePrompt: builtNegativePrompt, promptBreakdown } = buildScenePrompt({
+    // Always rebuild the prompt server-side from the canonical character profile.
+    // The client-side preview prompt is for display only.
+    const { finalPrompt, negativePrompt, promptBreakdown } = buildScenePrompt({
       characterProfile: character.profileJson,
       characterName: character.name,
       sceneDescription: finalSceneDescription,
-      useAdvanced,
-      location,
-      timeOfDay,
-      weather,
-      cameraAngle,
-      shotType,
-      lensStyle,
-      lighting,
-      pose,
-      expression,
-      action,
-      outfitInstruction,
-      props,
-      productPlacement,
-      realismLevel,
-      contentType,
+      identityLock,
+      hasCharacterSheet: !!characterSheetUrl,
       hasLocationRef: !!finalLocationRefUrl,
       hasOutfitRef: !!finalOutfitRefUrl,
       hasPoseRef: !!finalPoseRefUrl,
       hasProductRef: !!finalPropRefUrl
     });
 
-    const finalPrompt = finalComposedPrompt || builtPrompt;
-    const negativePrompt = negativePromptOverride || builtNegativePrompt;
-
-    // 3. Deduct credits
     await CreditService.deductCredits(
       userId,
       totalCost,
-      null, // Link inside generation records instead
+      null,
       `Compose scene with character "${character.name}" (${outputCount} image(s))`
     );
 
-    // Create a base generation record for each requested output image
     const generations = [];
     for (let i = 0; i < outputCount; i++) {
       const genId = `gen_${Math.random().toString(36).substring(2, 11)}`;
@@ -135,12 +105,13 @@ export async function POST(req: NextRequest) {
         prompt: finalPrompt,
         negativePrompt,
         inputAssetsJson: {
+          characterSheetUrl,
           locationRefUrl: finalLocationRefUrl,
           outfitRefUrl: finalOutfitRefUrl,
           poseRefUrl: finalPoseRefUrl,
           propRefUrl: finalPropRefUrl,
           promptBreakdown,
-          options: body
+          sceneDescription: finalSceneDescription
         },
         outputUrl: null,
         outputThumbnailUrl: null,
@@ -151,7 +122,6 @@ export async function POST(req: NextRequest) {
       generations.push(gen);
     }
 
-    // 4. Invoke image generator
     const imageProvider = await getImageProvider();
     const result = await imageProvider.generateImage({
       prompt: finalPrompt,
@@ -159,11 +129,11 @@ export async function POST(req: NextRequest) {
       aspectRatio,
       outputCount,
       characterProfile: character.profileJson,
-      characterSheetUrl: character.characterSheetUrl,
-      locationRefUrl: finalLocationRefUrl,
-      outfitRefUrl: finalOutfitRefUrl,
-      poseRefUrl: finalPoseRefUrl,
-      propRefUrl: finalPropRefUrl,
+      characterSheetUrl,
+      locationRefUrl: finalLocationRefUrl || undefined,
+      outfitRefUrl: finalOutfitRefUrl || undefined,
+      poseRefUrl: finalPoseRefUrl || undefined,
+      propRefUrl: finalPropRefUrl || undefined,
       workflow: 'scene'
     });
 
@@ -171,7 +141,6 @@ export async function POST(req: NextRequest) {
       throw new Error(result.errorMessage || 'Image provider failed');
     }
 
-    // 5. Update each generation record with its specific generated URL
     const completedGenerations = [];
     for (let i = 0; i < generations.length; i++) {
       const outputUrl = result.outputUrls[i] || result.outputUrls[0];
@@ -190,7 +159,6 @@ export async function POST(req: NextRequest) {
   } catch (error: any) {
     console.error('Scene generation error:', error);
 
-    // Refund credits
     if (totalCost > 0) {
       try {
         await CreditService.refundCredits(
@@ -204,7 +172,6 @@ export async function POST(req: NextRequest) {
       }
     }
 
-    // Mark all started jobs as failed
     for (const genId of generationIds) {
       await db.updateGeneration(genId, {
         status: 'failed',
