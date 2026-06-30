@@ -82,7 +82,7 @@ export default function LandingPage() {
             </div>
             <div>
               <span className="text-xs uppercase font-extrabold text-blue-400 tracking-wider">Step 2</span>
-              <h3 className="text-xl font-bold mt-1 text-white">Scene Composer</h3>
+              <h3 className="text-xl font-bold mt-1 text-white">Scene Composer (rev)</h3>
               <p className="text-gray-400 mt-2 text-sm leading-relaxed">
                 Take your locked character sheet, inject customized environment description, and swap clothing/poses with upload reference guides.
               </p>

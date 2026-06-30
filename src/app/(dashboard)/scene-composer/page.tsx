@@ -25,7 +25,7 @@ export default function SceneComposerPage() {
     <Suspense fallback={
       <div className="flex flex-col items-center justify-center py-20 gap-3">
         <div className="w-8 h-8 rounded-full border-2 border-t-transparent border-violet-500 animate-spin"></div>
-        <p className="text-sm text-gray-500 font-medium animate-pulse">Initializing Scene Composer...</p>
+        <p className="text-sm text-gray-500 font-medium animate-pulse">Initializing Scene Composer (rev)...</p>
       </div>
     }>
       <SceneComposerContent />
@@ -300,7 +300,7 @@ Attributes:
       {/* HEADER */}
       <div className="border-b border-white/5 pb-4">
         <h2 className="text-xl font-bold text-white flex items-center gap-2">
-          <ImageIcon className="w-5 h-5 text-violet-500" /> Scene Composer
+          <ImageIcon className="w-5 h-5 text-violet-500" /> {t('sceneComposer')}
         </h2>
         <p className="text-xs text-gray-500 mt-1">Compose customized images of your consistent character anywhere.</p>
       </div>

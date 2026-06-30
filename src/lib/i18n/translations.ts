@@ -5,7 +5,7 @@ export const translations = {
     // Navigation
     dashboard: 'Dashboard',
     characterStudio: 'Character Studio',
-    sceneComposer: 'Scene Composer',
+    sceneComposer: 'Scene Composer (rev)',
     videoStudio: 'Video Studio',
     assetLibrary: 'Asset Library',
     billingCredits: 'Billing & Credits',
@@ -157,7 +157,7 @@ export const translations = {
     // Navigation
     dashboard: 'Dasbor',
     characterStudio: 'Studio Karakter',
-    sceneComposer: 'Komposisi Scene',
+    sceneComposer: 'Komposisi Scene (rev)',
     videoStudio: 'Studio Video',
     assetLibrary: 'Galeri Aset',
     billingCredits: 'Kredit & Tagihan',
