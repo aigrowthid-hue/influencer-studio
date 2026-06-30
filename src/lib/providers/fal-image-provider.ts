@@ -164,32 +164,25 @@ export class FalImageProvider implements IImageProvider {
     };
   }
 
-  // GPT Image 1 Edit — strongest text/label fidelity, slower & pricier.
-  // If OPENAI_API_KEY is set we use the BYOK endpoint (charged to OpenAI account).
-  // Otherwise we use the Fal-hosted endpoint (charged to Fal credits, higher price).
+  // GPT Image 2 Edit — strongest text/label fidelity, slower & pricier.
+  // Fal-hosted via openai/gpt-image-2/edit (no extra API key needed).
   private async runSceneGptImage(
     input: ImageGenerationInput,
     refs: string[],
     count: number
   ): Promise<ImageGenerationResult> {
-    const openaiKey = process.env.OPENAI_API_KEY?.trim();
-    const useByok = !!openaiKey;
-    const endpoint = useByok
-      ? 'fal-ai/gpt-image-1/edit-image/byok'
-      : 'fal-ai/gpt-image-1/edit-image';
+    const endpoint = 'openai/gpt-image-2/edit';
     const image_size = this.mapGptImageSize(input.aspectRatio);
 
     const tasks = Array.from({ length: count }, (_, i) => {
       const variation = `${i}_${Math.floor(Math.random() * 99999)}`;
-      const payload: Record<string, any> = {
+      return this.callFal(endpoint, {
         prompt: `${input.prompt}\n\n[variation:${variation}]`,
         image_urls: refs,
         image_size,
         num_images: 1,
         quality: 'high'
-      };
-      if (useByok && openaiKey) payload.openai_api_key = openaiKey;
-      return this.callFal(endpoint, payload);
+      });
     });
 
     const urls = await this.collectUrls(tasks, 'GPT Image scene generation failed');
@@ -197,7 +190,7 @@ export class FalImageProvider implements IImageProvider {
       success: true,
       outputUrls: urls,
       provider: 'Fal.ai',
-      model: useByok ? 'gpt-image-1-edit-byok' : 'gpt-image-1-edit'
+      model: 'gpt-image-2-edit'
     };
   }
 
@@ -270,19 +263,23 @@ export class FalImageProvider implements IImageProvider {
     return urls;
   }
 
+  // openai/gpt-image-2 endpoints on Fal use Fal-style preset size names,
+  // not raw OpenAI pixel dimensions.
   private mapGptImageSize(aspectRatio?: string): string {
     switch (aspectRatio) {
       case '16:9':
+        return 'landscape_16_9';
       case '4:3':
       case '3:2':
-        return '1536x1024';
+        return 'landscape_4_3';
       case '9:16':
+        return 'portrait_16_9';
       case '4:5':
       case '2:3':
-        return '1024x1536';
+        return 'portrait_4_5';
       case '1:1':
       default:
-        return '1024x1024';
+        return 'square_hd';
     }
   }
 }
