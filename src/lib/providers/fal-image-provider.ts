@@ -111,7 +111,7 @@ export class FalImageProvider implements IImageProvider {
         prompt: `${input.prompt}\n\n[variation:${variation}]`,
         image_urls: refs,
         num_images: 1,
-        output_format: 'jpeg'
+        output_format: 'png'
       });
     });
 

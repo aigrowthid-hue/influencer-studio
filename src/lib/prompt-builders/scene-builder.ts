@@ -106,8 +106,8 @@ export function buildScenePrompt(input: SceneBuilderInput): PromptBuildResult {
   let productClause = '';
 
   if (hasCharacterSheet) {
-    identityRefPhrase = `the ${ordinal(pos)} reference image (${name}'s character sheet)`;
-    refLines.push(`${ordinal(pos)} image = ${name}'s identity / character sheet — use this as the absolute source of truth for ${pron.poss} face, hair, skin tone, body proportions, and signature features.`);
+    identityRefPhrase = `the ${ordinal(pos)} reference image (${name}'s identity portrait)`;
+    refLines.push(`${ordinal(pos)} image = ${name}'s identity portrait — this is a single close-up portrait of ${name}. Use this as the absolute source of truth for ${pron.poss} face shape, eyes, nose, mouth, hair color, hair style, skin tone, and any signature features. The person you generate MUST look like this exact same person; do not invent a different face.`);
     pos++;
   }
   if (hasOutfitRef) {
@@ -126,8 +126,8 @@ export function buildScenePrompt(input: SceneBuilderInput): PromptBuildResult {
     pos++;
   }
   if (hasProductRef) {
-    productClause = `${name} is holding and clearly featuring the exact product shown in the ${ordinal(pos)} reference image. The product must be reproduced faithfully — its shape, color, label artwork, and any text or logo on the packaging must remain unchanged and clearly readable. The product should be a clear visual focus of the composition.`;
-    refLines.push(`${ordinal(pos)} image = product reference — reproduce the product exactly (shape, color, label, text must be unchanged).`);
+    productClause = `CRITICAL — Product fidelity: ${name} is holding and clearly featuring the exact product shown in the ${ordinal(pos)} reference image. The product must be reproduced at full sharpness with these rules: (1) the shape, proportions, and silhouette of the packaging must match the reference pixel-for-pixel; (2) all label artwork, brand name, product name, and any text or numbers on the packaging must remain exactly as in the reference and must be crisp and clearly readable, not blurred or stylized; (3) the colors of the packaging must match the reference exactly; (4) do not warp, melt, or distort the product. The product should be held at a natural angle that shows the front label clearly toward the camera and should be a prominent visual focus of the composition.`;
+    refLines.push(`${ordinal(pos)} image = product reference — reproduce the product at full resolution; the label, brand name, text, and packaging colors must be pixel-accurate and crisp.`);
     pos++;
   }
 
@@ -155,7 +155,7 @@ ${guideBlock || `${name} is naturally placed in the scene above.`}
 
 Style: photorealistic, natural lighting, sharp focus, realistic skin texture with visible pores, magazine-quality composition, no plastic skin, no over-smoothing, no cartoon or 3D look. ${name}'s face and identity must remain consistent with ${identityFallback}.${refGuide}`.trim();
 
-  const negativePrompt = `different person, lookalike, sibling, face swap, distorted face, deformed face, asymmetric face, bad anatomy, extra limbs, extra fingers, mutated hands, blurry, low quality, plastic skin, over-smoothed, cartoon, anime, illustration, 3d render, cgi, watermark, text overlay, logo overlay, altered product label, changed product packaging`;
+  const negativePrompt = `different person, lookalike, sibling, face swap, distorted face, deformed face, asymmetric face, bad anatomy, extra limbs, extra fingers, mutated hands, blurry, low quality, plastic skin, over-smoothed, cartoon, anime, illustration, 3d render, cgi, watermark, text overlay, logo overlay, altered product label, changed product packaging, blurred product, low-resolution product, distorted product, melted packaging, unreadable label, fake brand name, generic packaging`;
 
   return {
     finalPrompt,

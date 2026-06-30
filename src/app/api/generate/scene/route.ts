@@ -3,6 +3,7 @@ import db from '@/lib/db/json-db';
 import { CreditService } from '@/lib/credits/credit-service';
 import { buildScenePrompt } from '@/lib/prompt-builders/scene-builder';
 import { getImageProvider } from '@/lib/providers';
+import { extractCharacterPortrait } from '@/lib/image/character-portrait';
 
 const COST_PER_SCENE_IMAGE = 5;
 
@@ -122,6 +123,16 @@ export async function POST(req: NextRequest) {
       generations.push(gen);
     }
 
+    // The character sheet is a 9-panel grid which confuses multi-reference image models
+    // (they read it as 9 different people). Extract the close-up front portrait so the
+    // model gets a clean single-face reference for identity lock.
+    let identityRefUrl = characterSheetUrl;
+    try {
+      identityRefUrl = await extractCharacterPortrait(characterSheetUrl);
+    } catch (cropErr) {
+      console.warn('Character portrait extraction failed, falling back to full sheet:', cropErr);
+    }
+
     const imageProvider = await getImageProvider();
     const result = await imageProvider.generateImage({
       prompt: finalPrompt,
@@ -129,7 +140,7 @@ export async function POST(req: NextRequest) {
       aspectRatio,
       outputCount,
       characterProfile: character.profileJson,
-      characterSheetUrl,
+      characterSheetUrl: identityRefUrl,
       locationRefUrl: finalLocationRefUrl || undefined,
       outfitRefUrl: finalOutfitRefUrl || undefined,
       poseRefUrl: finalPoseRefUrl || undefined,
